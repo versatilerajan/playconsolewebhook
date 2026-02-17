@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { MongoClient } from 'mongodb';
 
-// ────────────────────────────────────────────────
-// Global cached MongoDB connection (important for serverless)
+// Global cached MongoDB connection (essential for serverless / Vercel)
 let cachedClient: MongoClient | null = null;
 let cachedDb: any = null;
 
@@ -11,7 +10,8 @@ async function getMongoDb() {
   if (cachedDb) return cachedDb;
 
   if (!process.env.MONGODB_URI) {
-    throw new Error('MONGODB_URI environment variable is missing');
+    console.error('[Mongo] MONGODB_URI is missing in environment variables');
+    throw new Error('MONGODB_URI is not configured');
   }
 
   const client = new MongoClient(process.env.MONGODB_URI, {
@@ -25,16 +25,16 @@ async function getMongoDb() {
   cachedClient = client;
   cachedDb = client.db('upsc_cron');
 
+  console.log('[Mongo] Connected to database: upsc_cron');
   return cachedDb;
 }
 
-// ────────────────────────────────────────────────
-// Singleton Google Publisher client (initialized once at cold start)
+// Singleton Google Android Publisher client
 let androidPublisher: any = null;
 
 try {
   if (!process.env.GOOGLE_SERVICE_ACCOUNT) {
-    throw new Error('GOOGLE_SERVICE_ACCOUNT environment variable is missing');
+    throw new Error('GOOGLE_SERVICE_ACCOUNT is missing in environment variables');
   }
 
   const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
@@ -52,17 +52,20 @@ try {
 
   console.log('[cold-start] Google Play Publisher client initialized successfully');
 } catch (err: any) {
-  console.error('[cold-start] Failed to initialize Google Publisher client:', err.message);
+  console.error('[cold-start] Failed to initialize Google Publisher client:', {
+    message: err.message,
+    stack: err.stack?.substring(0, 600),
+  });
 }
 
 // ────────────────────────────────────────────────
-// Webhook handler
+// Main webhook handler (POST only - Google Pub/Sub)
 export async function POST(req: NextRequest) {
-  // Must always return 200 to acknowledge Pub/Sub message
-  // Returning 4xx/5xx causes redelivery loop → very expensive
+  // ALWAYS return 200 OK to acknowledge Pub/Sub message
+  // Returning 4xx/5xx triggers infinite redelivery → very expensive
 
   if (!androidPublisher) {
-    console.error('Google Publisher client not initialized');
+    console.error('[webhook] Google Publisher client not available');
     return NextResponse.json({}, { status: 200 });
   }
 
@@ -70,36 +73,36 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
 
     if (!body?.message?.data) {
-      console.warn('Invalid Pub/Sub format - missing message.data');
+      console.warn('[webhook] Invalid Pub/Sub format - missing message.data');
       return NextResponse.json({ error: 'Missing message.data' }, { status: 400 });
     }
 
-    // Decode base64 payload
+    // Decode base64 → JSON
     let payload: any;
     try {
       const raw = Buffer.from(body.message.data, 'base64').toString('utf-8');
       payload = JSON.parse(raw);
-    } catch (e: any) {
-      console.error('Failed to decode/parse Pub/Sub payload:', e.message);
+    } catch (decodeErr: any) {
+      console.error('[webhook] Failed to decode/parse Pub/Sub payload:', decodeErr.message);
       return NextResponse.json({}, { status: 200 });
     }
 
     const notification = payload.subscriptionNotification;
     if (!notification) {
-      console.log('Not a subscription notification event');
+      console.log('[webhook] Not a subscription notification event');
       return NextResponse.json({}, { status: 200 });
     }
 
     const { purchaseToken, subscriptionId } = notification;
 
     if (!purchaseToken || !subscriptionId) {
-      console.warn('Missing purchaseToken or subscriptionId');
+      console.warn('[webhook] Missing purchaseToken or subscriptionId');
       return NextResponse.json({}, { status: 200 });
     }
 
-    console.log(`Processing subscription notification → ${subscriptionId} / ${purchaseToken}`);
+    console.log(`[webhook] Processing → subscriptionId: ${subscriptionId} | purchaseToken: ${purchaseToken}`);
 
-    // Verify current subscription state from Google Play
+    // Verify subscription with Google Play
     const { data: purchase } = await androidPublisher.purchases.subscriptions.get({
       packageName: process.env.PACKAGE_NAME || 'com.rajan.cron',
       subscriptionId,
@@ -107,7 +110,8 @@ export async function POST(req: NextRequest) {
     });
 
     if (!purchase?.expiryTimeMillis) {
-      throw new Error('Invalid or empty purchase data from Google Play');
+      console.error('[webhook] Invalid/empty purchase data from Google Play');
+      throw new Error('No valid expiryTimeMillis returned');
     }
 
     const expiryMs = Number(purchase.expiryTimeMillis);
@@ -116,7 +120,7 @@ export async function POST(req: NextRequest) {
     // Save / update in MongoDB
     const db = await getMongoDb();
 
-    await db.collection('subscriptions').updateOne(
+    const result = await db.collection('subscriptions').updateOne(
       { purchaseToken },
       {
         $set: {
@@ -129,6 +133,9 @@ export async function POST(req: NextRequest) {
           paymentState: purchase.paymentState,
           orderId: purchase.orderId,
           linkedPurchaseToken: purchase.linkedPurchaseToken,
+          countryCode: purchase.countryCode,
+          priceCurrencyCode: purchase.priceCurrencyCode,
+          priceAmountMicros: purchase.priceAmountMicros,
           updatedAt: new Date(),
         },
         $setOnInsert: {
@@ -139,27 +146,30 @@ export async function POST(req: NextRequest) {
       { upsert: true }
     );
 
-    console.log(`Subscription saved/updated → ${subscriptionId} • active=${isActive} • expiry=${new Date(expiryMs).toISOString()}`);
+    console.log(`[webhook] DB update result → matched: ${result.matchedCount}, modified: ${result.modifiedCount}, upserted: ${result.upsertedCount}`);
+
+    console.log(`[webhook] Subscription processed → ${subscriptionId} • active: ${isActive} • expires: ${new Date(expiryMs).toISOString()}`);
 
     return NextResponse.json({ success: true }, { status: 200 });
 
   } catch (err: any) {
-    console.error('RTDN webhook error:', {
+    console.error('[webhook] Critical error in RTDN handler:', {
       message: err.message,
       stack: err.stack?.substring(0, 800),
       purchaseToken: err.purchaseToken || 'unknown',
     });
 
-    // Still acknowledge - critical for Pub/Sub
+    // Still acknowledge Pub/Sub
     return NextResponse.json({}, { status: 200 });
   }
 }
 
-// Optional: simple health check (for debugging)
+// Optional health check endpoint (remove in production if not needed)
 export async function GET() {
   return NextResponse.json({
     status: 'ok',
     message: 'Webhook is alive - use POST method for Google Play notifications',
     timestamp: new Date().toISOString(),
+    googleClientReady: !!androidPublisher,
   });
 }
