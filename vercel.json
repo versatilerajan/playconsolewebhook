@@ -1,11 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "functions": {
-    "app/api/play-webhook/route.ts": {
-      "runtime": "nodejs20.x",
-      "maxDuration": 30
-    }
-  },
   "cleanUrls": true,
   "trailingSlash": false
 }
