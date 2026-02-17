@@ -29,5 +29,13 @@
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "vercel": {
+    "builds": [
+      {
+        "src": "package.json",
+        "use": "@vercel/next"
+      }
+    ]
   }
 }
