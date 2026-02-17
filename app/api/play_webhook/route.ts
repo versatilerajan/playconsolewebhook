@@ -1,9 +1,9 @@
-import 'dotenv/config'; 
-
+import { NextRequest, NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { MongoClient } from 'mongodb';
-import { NextRequest, NextResponse } from 'next/server';
 
+// ────────────────────────────────────────────────
+// Global cached MongoDB connection (important for serverless)
 let cachedClient: MongoClient | null = null;
 let cachedDb: any = null;
 
@@ -11,7 +11,7 @@ async function getMongoDb() {
   if (cachedDb) return cachedDb;
 
   if (!process.env.MONGODB_URI) {
-    throw new Error('MONGODB_URI is not set');
+    throw new Error('MONGODB_URI environment variable is missing');
   }
 
   const client = new MongoClient(process.env.MONGODB_URI, {
@@ -28,12 +28,13 @@ async function getMongoDb() {
   return cachedDb;
 }
 
-// Singleton Google client (created once at cold start)
+// ────────────────────────────────────────────────
+// Singleton Google Publisher client (initialized once at cold start)
 let androidPublisher: any = null;
 
 try {
   if (!process.env.GOOGLE_SERVICE_ACCOUNT) {
-    throw new Error('GOOGLE_SERVICE_ACCOUNT missing in environment');
+    throw new Error('GOOGLE_SERVICE_ACCOUNT environment variable is missing');
   }
 
   const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
@@ -49,35 +50,43 @@ try {
     auth: jwtClient,
   });
 
-  console.log('[cold-start] Google Play Publisher client ready');
+  console.log('[cold-start] Google Play Publisher client initialized successfully');
 } catch (err: any) {
-  console.error('[cold-start] Google client init failed:', err.message);
+  console.error('[cold-start] Failed to initialize Google Publisher client:', err.message);
 }
 
+// ────────────────────────────────────────────────
+// Webhook handler
 export async function POST(req: NextRequest) {
+  // Must always return 200 to acknowledge Pub/Sub message
+  // Returning 4xx/5xx causes redelivery loop → very expensive
+
   if (!androidPublisher) {
-    console.error('Google client not available');
-    return NextResponse.json({}, { status: 200 }); // must ack Pub/Sub
+    console.error('Google Publisher client not initialized');
+    return NextResponse.json({}, { status: 200 });
   }
 
   try {
     const body = await req.json();
 
     if (!body?.message?.data) {
+      console.warn('Invalid Pub/Sub format - missing message.data');
       return NextResponse.json({ error: 'Missing message.data' }, { status: 400 });
     }
 
+    // Decode base64 payload
     let payload: any;
     try {
       const raw = Buffer.from(body.message.data, 'base64').toString('utf-8');
       payload = JSON.parse(raw);
     } catch (e: any) {
-      console.error('Pub/Sub decode/parse failed:', e.message);
+      console.error('Failed to decode/parse Pub/Sub payload:', e.message);
       return NextResponse.json({}, { status: 200 });
     }
 
     const notification = payload.subscriptionNotification;
     if (!notification) {
+      console.log('Not a subscription notification event');
       return NextResponse.json({}, { status: 200 });
     }
 
@@ -88,6 +97,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({}, { status: 200 });
     }
 
+    console.log(`Processing subscription notification → ${subscriptionId} / ${purchaseToken}`);
+
+    // Verify current subscription state from Google Play
     const { data: purchase } = await androidPublisher.purchases.subscriptions.get({
       packageName: process.env.PACKAGE_NAME || 'com.rajan.cron',
       subscriptionId,
@@ -95,12 +107,13 @@ export async function POST(req: NextRequest) {
     });
 
     if (!purchase?.expiryTimeMillis) {
-      throw new Error('Invalid Google Play response');
+      throw new Error('Invalid or empty purchase data from Google Play');
     }
 
     const expiryMs = Number(purchase.expiryTimeMillis);
     const isActive = expiryMs > Date.now();
 
+    // Save / update in MongoDB
     const db = await getMongoDb();
 
     await db.collection('subscriptions').updateOne(
@@ -114,6 +127,8 @@ export async function POST(req: NextRequest) {
           kind: purchase.kind,
           autoRenewing: purchase.autoRenewing ?? false,
           paymentState: purchase.paymentState,
+          orderId: purchase.orderId,
+          linkedPurchaseToken: purchase.linkedPurchaseToken,
           updatedAt: new Date(),
         },
         $setOnInsert: {
@@ -124,17 +139,27 @@ export async function POST(req: NextRequest) {
       { upsert: true }
     );
 
-    console.log(`Updated subscription ${subscriptionId} → active: ${isActive}`);
+    console.log(`Subscription saved/updated → ${subscriptionId} • active=${isActive} • expiry=${new Date(expiryMs).toISOString()}`);
 
     return NextResponse.json({ success: true }, { status: 200 });
 
   } catch (err: any) {
-    console.error('RTDN error:', {
+    console.error('RTDN webhook error:', {
       message: err.message,
-      stack: err.stack?.slice(0, 600),
+      stack: err.stack?.substring(0, 800),
+      purchaseToken: err.purchaseToken || 'unknown',
     });
 
-    // ALWAYS return 200 to Pub/Sub — otherwise redeliveries loop forever
+    // Still acknowledge - critical for Pub/Sub
     return NextResponse.json({}, { status: 200 });
   }
+}
+
+// Optional: simple health check (for debugging)
+export async function GET() {
+  return NextResponse.json({
+    status: 'ok',
+    message: 'Webhook is alive - use POST method for Google Play notifications',
+    timestamp: new Date().toISOString(),
+  });
 }
