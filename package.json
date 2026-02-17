@@ -1,18 +1,33 @@
 {
   "name": "cronpremiumuser",
   "version": "1.0.0",
-  "description": "",
+  "private": true,
+  "description": "UPSC Cron Premium User Backend – Google Play Subscriptions Webhook",
   "type": "module",
-  "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "lint:fix": "next lint --fix"
   },
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "dotenv": "^17.3.1",
-    "googleapis": "^171.4.0",
-    "mongodb": "^7.1.0",
-    "server": "^1.0.42"
+    "next": "^15.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "googleapis": "^140.0.1",
+    "mongodb": "^6.9.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "^5.6.3",
+    "eslint": "^9.12.0",
+    "eslint-config-next": "^15.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   }
 }
