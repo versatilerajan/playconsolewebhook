@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import admin from 'firebase-admin';
 import { getMongoDb } from '@/lib/mongodb';
-import { getFirebaseAdmin } from '@/lib/firebaseAdmin';
+import { getFirebaseAdmin } from '@/lib/firebaseadmin';
 
 export async function GET(req: NextRequest) {
   try {
