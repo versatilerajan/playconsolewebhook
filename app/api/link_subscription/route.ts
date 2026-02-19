@@ -37,7 +37,6 @@ export async function POST(req: NextRequest) {
       },
       { upsert: true }
     );
-
     console.log(`[link-subscription] Linked purchaseToken ${purchaseToken} to user ${uid}`);
 
     return NextResponse.json({ success: true });
