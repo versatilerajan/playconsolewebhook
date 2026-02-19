@@ -17,6 +17,7 @@
     "react-dom": "^18.3.1",
     "googleapis": "^140.0.1",
     "mongodb": "^6.9.0",
+    "firebase-admin": "^13.0.0",  
     "dotenv": "^16.4.5"
   },
   "devDependencies": {
@@ -29,13 +30,5 @@
   },
   "engines": {
     "node": ">=20.0.0"
-  },
-  "vercel": {
-    "builds": [
-      {
-        "src": "package.json",
-        "use": "@vercel/next"
-      }
-    ]
   }
 }
