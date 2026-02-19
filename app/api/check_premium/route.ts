@@ -1,9 +1,7 @@
-// app/api/check_premium/route.ts
-
 import { NextRequest, NextResponse } from 'next/server';
-import { getMongoDb } from '../../../lib/mongodb'; // adjust path
+import { getMongoDb } from '../../../lib/mongodb'; 
 import admin from 'firebase-admin';
-import { getFirebaseAdmin } from '../../../lib/firebaseAdmin'; // adjust path
+import { getFirebaseAdmin } from '../../../lib/firebaseAdmin'; 
 
 export async function GET(req: NextRequest) {
   try {
@@ -13,7 +11,6 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ premium: false, message: 'Missing token' }, { status: 400 });
     }
 
-    // 2. Get Firebase ID token from Authorization header
     const authHeader = req.headers.get('authorization');
     if (!authHeader?.startsWith('Bearer ')) {
       return NextResponse.json({ premium: false, message: 'Authorization required' }, { status: 401 });
