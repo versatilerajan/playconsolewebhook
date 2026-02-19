@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getMongoDb } from '@/lib/mongodb';
-import { getFirebaseAdmin } from '@/lib/firebaseAdmin';
+import { getFirebaseAdmin } from '@/lib/firebaseadmin';
 
 export async function POST(req: NextRequest) {
   try {
